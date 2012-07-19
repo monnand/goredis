@@ -468,11 +468,13 @@ func (client *Client) Set(key string, val []byte) error {
 }
 
 func (client *Client) Get(key string) ([]byte, error) {
-	res, _ := client.sendCommand("GET", key)
-	if res == nil {
-		return nil, RedisError("Key `" + key + "` does not exist")
+	res, err := client.sendCommand("GET", key)
+	if err != nil {
+		return nil, err
 	}
-
+	if res == nil {
+		return []byte(""), nil
+	}
 	data := res.([]byte)
 	return data, nil
 }
@@ -1011,12 +1013,14 @@ func (client *Client) Hset(key string, field string, val []byte) (bool, error) {
 }
 
 func (client *Client) Hget(key string, field string) ([]byte, error) {
-	res, _ := client.sendCommand("HGET", key, field)
+	res, err := client.sendCommand("HGET", key, field)
 
-	if res == nil {
-		return nil, RedisError("Hget failed")
+	if err != nil {
+		return nil, err
 	}
-
+	if res == nil {
+		return []byte(""), nil
+	}
 	data := res.([]byte)
 	return data, nil
 }
@@ -1399,47 +1403,47 @@ func (client *Client) Ping() (string, error) {
 }
 
 type Transaction struct {
-    c   net.Conn
-    *Client
+	c net.Conn
+	*Client
 }
 
 func (client *Client) Transaction() (*Transaction, error) {
-    c, err := client.openConnection()
-    if err != nil {
-        return nil, err
-    }
-    return &Transaction{c, client}, nil
+	c, err := client.openConnection()
+	if err != nil {
+		return nil, err
+	}
+	return &Transaction{c, client}, nil
 }
 
 func (t *Transaction) sendCommand(cmd string, args ...string) (data interface{}, err error) {
-    b := commandBytes(cmd, args...)
-    return t.Client.rawSend(t.c, b)
+	b := commandBytes(cmd, args...)
+	return t.Client.rawSend(t.c, b)
 }
 
 func (t *Transaction) Watch(keys []string) error {
-    _, err := t.sendCommand("WATCH", keys...)
-    return err
+	_, err := t.sendCommand("WATCH", keys...)
+	return err
 }
 
 func (t *Transaction) Unwatch() error {
-    _, err := t.sendCommand("UNWATCH")
-    return err
+	_, err := t.sendCommand("UNWATCH")
+	return err
 }
 
 func (t *Transaction) Multi() error {
-    _, err := t.sendCommand("MULTI")
-    return err
+	_, err := t.sendCommand("MULTI")
+	return err
 }
 
 func (t *Transaction) Discard() error {
-    _, err := t.sendCommand("DISCARD")
-    return err
+	_, err := t.sendCommand("DISCARD")
+	return err
 }
 
 func (t *Transaction) Exec() ([][]byte, error) {
-    res, err := t.sendCommand("EXEC")
-    if err != nil {
-        return nil, err
-    }
-    return res.([][]byte), nil
+	res, err := t.sendCommand("EXEC")
+	if err != nil {
+		return nil, err
+	}
+	return res.([][]byte), nil
 }
