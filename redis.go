@@ -14,11 +14,9 @@ import (
 	"syscall"
 )
 
-const (
-	MaxPoolSize = 5
-)
+var MaxPoolSize = 50
 
-var defaultAddr = "127.0.0.1:7379"
+var defaultAddr = "127.0.0.1:6379"
 
 type Client struct {
 	Addr     string
@@ -33,6 +31,16 @@ type RedisError string
 func (err RedisError) Error() string { return "Redis Error: " + string(err) }
 
 var doesNotExist = RedisError("Key does not exist ")
+
+func NewClient(poolsize int) (c *Client) {
+	_c := new(Client)
+	MaxPoolSize = poolsize
+	_c.pool = make(chan net.Conn, MaxPoolSize)
+	for i := 0; i < MaxPoolSize; i++ {
+		_c.pool <- nil
+	}
+	return _c
+}
 
 // reads a bulk reply (i.e $5\r\nhello)
 func readBulk(reader *bufio.Reader, head string) ([]byte, error) {
@@ -232,7 +240,7 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
 	err = writeRequest(c, "PING")
 
 	// On first attempt permit a reconnection attempt
-	if err == io.EOF {
+	if err == io.EOF || err == io.ErrClosedPipe {
 		// Looks like we have to open a new connection
 		c, err = client.openConnection()
 		if err != nil {
