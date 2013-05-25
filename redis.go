@@ -12,18 +12,20 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var MaxPoolSize = 50
 
 var defaultAddr = "127.0.0.1:6379"
 
-var defaultTimeOut = 2
+var defaultTimeOut time.Duration = 2
 
 type Client struct {
 	Addr     string
 	Db       int
 	Password string
+	TimeOut  time.Duration
 	//the connection pool
 	pool chan net.Conn
 }
@@ -176,8 +178,11 @@ func (client *Client) openConnection() (c net.Conn, err error) {
 	if client.Addr != "" {
 		addr = client.Addr
 	}
-	//c, err = net.Dial("tcp", addr)
-	c, err = net.DialTimeout("tcp", addr, time.Second*defaultTimeOut) 
+	var timeOut = defaultTimeOut
+	if client.TimeOut != 0 {
+		timeOut = client.TimeOut
+	}
+	c, err = net.DialTimeout("tcp", addr, time.Second*timeOut)
 	if err != nil {
 		return
 	}
