@@ -171,6 +171,7 @@ func (client *Client) rawSend(c net.Conn, cmd []byte) (interface{}, error) {
 	return data, nil
 }
 
+// openConnection establishes a redis connection. It returns either a connection or an error.
 func (client *Client) openConnection() (c net.Conn, err error) {
 
 	var addr = defaultAddr
@@ -191,6 +192,9 @@ func (client *Client) openConnection() (c net.Conn, err error) {
 		cmd := fmt.Sprintf("SELECT %d\r\n", client.Db)
 		_, err = client.rawSend(c, []byte(cmd))
 		if err != nil {
+			// Close the connection if we failed to SELECT Db
+			c.Close()
+			c = nil
 			return
 		}
 	}
@@ -205,22 +209,31 @@ func (client *Client) sendCommand(cmd string, args ...string) (data interface{},
 
 	var b []byte
 	if err != nil {
-		//add the client back to the queue
-		client.pushCon(c)
+		// pool has no connection or failed to establish a connection
+		client.pushCon(nil)
 		return data, err
 	}
 
 	b = commandBytes(cmd, args...)
 	data, err = client.rawSend(c, b)
+	// Retry the command if it failed (after redis connection was successfully initialized)
 	if err2, ok := err.(syscall.Errno); err == io.EOF || (ok && err2 == syscall.EPIPE) {
+		c.Close()
 		c, err = client.openConnection()
 		if err != nil {
-			//add the client back to the queue
-			client.pushCon(c)
+			// Close the connection and make the next pool user attempt to create a new connection.
+			client.pushCon(nil)
 			return data, err
 		}
 
 		data, err = client.rawSend(c, b)
+		// The retry can also have an error - this is checked below.
+	}
+	// If there was any kind of error, close the connection and make the next pool user attempt to create a new connection.
+	if err != nil {
+		c.Close()
+		client.pushCon(nil)
+		return nil, err
 	}
 
 	//add the client back to the queue
@@ -235,8 +248,6 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
 	var reader *bufio.Reader
 
 	if err != nil {
-		// Close client and synchronization issues are a nightmare to solve.
-		c.Close()
 		// Push nil back onto queue
 		client.pushCon(nil)
 		return err
@@ -248,29 +259,32 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
 	err = writeRequest(c, "PING")
 
 	// On first attempt permit a reconnection attempt
-	if err == io.EOF || err == io.ErrClosedPipe {
+	if err2, ok := err.(syscall.Errno); err == io.EOF || err == io.ErrClosedPipe || (ok && err2 == syscall.EPIPE) {
+		// Make sure that the connection is closed.
+		c.Close()
 		// Looks like we have to open a new connection
 		c, err = client.openConnection()
 		if err != nil {
-			// Close client and synchronization issues are a nightmare to solve.
-			c.Close()
 			// Push nil back onto queue
+			// This makes the next pool user attempt to create a new connection.
 			client.pushCon(nil)
 			return err
 		}
 		reader = bufio.NewReader(c)
+	} else if err != nil {
+		// If the error is unexpected, then shut down the connection, push nil
+		c.Close()
+		client.pushCon(nil)
+		return err
 	} else {
 		// Read Ping response
 		pong, err := readResponse(reader)
-		if pong != "PONG" {
-			return RedisError("Unexpected response to PING.")
-		}
-		if err != nil {
+		if pong != "PONG" || err != nil {
 			// Close client and synchronization issues are a nightmare to solve.
 			c.Close()
 			// Push nil back onto queue
 			client.pushCon(nil)
-			return err
+			return RedisError("Unexpected response to PING.")
 		}
 	}
 
@@ -313,6 +327,7 @@ func (client *Client) sendCommands(cmdArgs <-chan []string, data chan<- interfac
 	return err
 }
 
+// popCon returns either a connection or an error. If it didn't get a connection from the pool, it establishes a new connection.
 func (client *Client) popCon() (net.Conn, error) {
 	if client.pool == nil {
 		client.pool = make(chan net.Conn, MaxPoolSize)
